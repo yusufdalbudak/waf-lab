@@ -10,6 +10,11 @@ aiofiles>=23.2.1
 # Prometheus metrics
 prometheus-client>=0.19.0
 
+# Security (already included in standard library, but documented)
+# hashlib - PBKDF2 password hashing
+# secrets - Secure random tokens
+# hmac - Cookie signing
+
 # Optional: Redis support for distributed rate limiting
 # redis>=5.0.0
 # aioredis>=2.0.0

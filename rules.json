@@ -49,6 +49,55 @@
       "category": "remote_code_execution",
       "severity": "critical",
       "score": 100.0
+    },
+    {
+      "id": "RCE-2",
+      "pattern": "(?i)(\\$\\{|jndi:|ldap://|rmi://|dns://|\\{\\{.*\\}\\})",
+      "category": "remote_code_execution",
+      "severity": "critical",
+      "score": 90.0
+    },
+    {
+      "id": "XXE-1",
+      "pattern": "(?i)(<!ENTITY|<!DOCTYPE|SYSTEM\\s+['\"]|PUBLIC\\s+['\"]|file://|http://|php://|expect://)",
+      "category": "xml_external_entity",
+      "severity": "high",
+      "score": 80.0
+    },
+    {
+      "id": "SSRF-1",
+      "pattern": "(?i)(http://127\\.0\\.0\\.1|http://localhost|http://0\\.0\\.0\\.0|http://169\\.254|gopher://|dict://)",
+      "category": "server_side_request_forgery",
+      "severity": "high",
+      "score": 75.0
+    },
+    {
+      "id": "LFI-1",
+      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|include\\s*\\(|require\\s*\\(|php://|file://|data://)",
+      "category": "local_file_inclusion",
+      "severity": "high",
+      "score": 85.0
+    },
+    {
+      "id": "RFI-1",
+      "pattern": "(?i)(http://|https://|ftp://|file://|php://|data://|expect://)",
+      "category": "remote_file_inclusion",
+      "severity": "critical",
+      "score": 90.0
+    },
+    {
+      "id": "HEADER-1",
+      "pattern": "(?i)(X-Forwarded-For|X-Real-IP|X-Originating-IP|X-Remote-IP|X-Remote-Addr)",
+      "category": "header_manipulation",
+      "severity": "medium",
+      "score": 30.0
+    },
+    {
+      "id": "PROTOCOL-1",
+      "pattern": "(?i)(TRACE|CONNECT|OPTIONS|PATCH|DELETE)",
+      "category": "protocol_anomaly",
+      "severity": "medium",
+      "score": 25.0
     }
   ],
   "positive_rules": [],

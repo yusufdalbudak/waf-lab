@@ -5,8 +5,17 @@ from typing import Optional
 
 
 async def dashboard_ui_handler(request: web.Request) -> web.Response:
-    """Serve the dashboard HTML interface."""
-    html = """<!DOCTYPE html>
+    """Serve the dashboard HTML interface (requires authentication)."""
+    from auth.session_manager import get_session_manager
+    session_manager = get_session_manager()
+    session = session_manager.get_session(request)
+    
+    username = session.get("username", "User") if session else "User"
+    is_admin = session.get("is_admin", False) if session else False
+    admin_badge = " (Admin)" if is_admin else ""
+    
+    # Build HTML - use triple quotes and replace placeholders
+    html_template = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -99,9 +108,16 @@ async def dashboard_ui_handler(request: web.Request) -> web.Response:
 </head>
 <body>
     <div class="header">
-        <h1>🛡️ WAF Traffic Dashboard</h1>
-        <p>Real-time monitoring of Web Application Firewall traffic</p>
-        <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh</button>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h1>🛡️ WAF Traffic Dashboard</h1>
+                <p>Real-time monitoring of Web Application Firewall traffic | Logged in as: <strong>""" + username + """</strong>""" + admin_badge + """</p>
+            </div>
+            <div>
+                <button class="refresh-btn" onclick="loadDashboard()">🔄 Refresh</button>
+                <button class="refresh-btn" onclick="window.location.href='/logout'" style="margin-left: 10px; background: #ff4444;">🚪 Logout</button>
+            </div>
+        </div>
         <label class="auto-refresh">
             <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto-refresh (5s)
         </label>
@@ -229,6 +245,11 @@ async def dashboard_ui_handler(request: web.Request) -> web.Response:
     </script>
 </body>
 </html>"""
+    
+    # Format with username and admin badge (escape for HTML)
+    import html as html_module
+    safe_username = html_module.escape(username)
+    html = html_template.replace("{username}", safe_username).replace("{admin_badge}", admin_badge)
     return web.Response(text=html, content_type='text/html')
 
 

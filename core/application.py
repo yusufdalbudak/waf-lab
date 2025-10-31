@@ -64,11 +64,18 @@ class WAFApplication:
         # PRTG sensor endpoint
         self.app.router.add_get('/prtg', self.prtg_sensor)
         
-        # Dashboard endpoints
+        # Authentication endpoints
+        from auth.auth_handlers import login_page_handler, login_handler, logout_handler, require_auth
+        self.app.router.add_get('/login', login_page_handler)
+        self.app.router.add_post('/auth/login', login_handler)
+        self.app.router.add_get('/logout', logout_handler)
+        self.app.router.add_post('/auth/logout', logout_handler)
+        
+        # Dashboard endpoints (protected)
         from core.dashboard_handlers import dashboard_ui_handler, dashboard_stats_handler, dashboard_traffic_handler
-        self.app.router.add_get('/dashboard', dashboard_ui_handler)
-        self.app.router.add_get('/api/dashboard/stats', dashboard_stats_handler)
-        self.app.router.add_get('/api/dashboard/traffic', dashboard_traffic_handler)
+        self.app.router.add_get('/dashboard', require_auth(dashboard_ui_handler))
+        self.app.router.add_get('/api/dashboard/stats', require_auth(dashboard_stats_handler))
+        self.app.router.add_get('/api/dashboard/traffic', require_auth(dashboard_traffic_handler))
     
     async def handle_request(self, request: web.Request) -> web.Response:
         """
