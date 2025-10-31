@@ -1,4 +1,6 @@
 # 🔒 Production-Grade WAF Lab
+<img width="1470" height="875" alt="Screenshot 2025-11-01 at 01 57 44" src="https://github.com/user-attachments/assets/0e0c0962-b90d-4df2-b003-e91589a1b2dc" />
+
 
 **Advanced Web Application Firewall** built with Python `aiohttp` for high-performance asynchronous request processing.
 
