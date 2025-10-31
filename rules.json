@@ -1,0 +1,57 @@
+{
+  "backend": "http://backend:3000",
+  "negative_rules": [
+    {
+      "id": "SQLi-1",
+      "pattern": "(?i)(union(\\s|%20)+select|drop(\\s|%20)+table|insert(\\s|%20)+into|delete(\\s|%20)+from|--|;\\s*--|\\bor(\\s|%20)+1=1\\b)",
+      "category": "sql_injection",
+      "severity": "high",
+      "score": 80.0
+    },
+    {
+      "id": "SQLi-2",
+      "pattern": "(?i)(exec(\\s|%20)+\\(|xp_cmdshell|sp_executesql|pg_exec)",
+      "category": "sql_injection",
+      "severity": "critical",
+      "score": 90.0
+    },
+    {
+      "id": "XSS-1",
+      "pattern": "(?i)(<script|%3Cscript|onerror=|onload=|alert\\(\\)|javascript:|eval\\s*\\()",
+      "category": "cross_site_scripting",
+      "severity": "high",
+      "score": 70.0
+    },
+    {
+      "id": "XSS-2",
+      "pattern": "(?i)(<iframe|<object|<embed|data:text/html)",
+      "category": "cross_site_scripting",
+      "severity": "medium",
+      "score": 50.0
+    },
+    {
+      "id": "CMD-1",
+      "pattern": "(?i)([;&|`]\\s*(ls|cat|pwd|whoami|id|uname|wget|curl|nc|netcat))",
+      "category": "command_injection",
+      "severity": "critical",
+      "score": 95.0
+    },
+    {
+      "id": "PATH-1",
+      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self|/windows/system32)",
+      "category": "path_traversal",
+      "severity": "high",
+      "score": 75.0
+    },
+    {
+      "id": "RCE-1",
+      "pattern": "(?i)(eval\\s*\\(|exec\\s*\\(|system\\s*\\(|shell_exec|passthru)",
+      "category": "remote_code_execution",
+      "severity": "critical",
+      "score": 100.0
+    }
+  ],
+  "positive_rules": [],
+  "ip_whitelist": [],
+  "ip_blacklist": []
+}
