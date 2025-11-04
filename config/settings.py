@@ -31,6 +31,8 @@ class LoggingConfig:
     log_level: str = "INFO"
     json_format: bool = True
     enable_console: bool = True
+    destination: str = "/app/logs/waf.log"
+    structured: bool = True
 
 
 @dataclass
@@ -53,6 +55,9 @@ class SecurityConfig:
     # Anomaly detection
     anomaly_threshold: float = 50.0  # Score threshold for blocking
     enable_anomaly_detection: bool = True
+    
+    # Security headers dictionary from config
+    security_headers: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -107,6 +112,41 @@ def load_config(config_path: str = "rules.json") -> Config:
             # Backend URL
             if "backend" in data:
                 config.backend.url = data["backend"]
+            
+            # Meta thresholds (anomaly_block_threshold)
+            if "meta" in data and "thresholds" in data["meta"]:
+                if "anomaly_block_threshold" in data["meta"]["thresholds"]:
+                    config.security.anomaly_threshold = float(data["meta"]["thresholds"]["anomaly_block_threshold"])
+                
+            # Rate limiting configuration
+            if "rate_limit" in data:
+                rate_limit = data["rate_limit"]
+                if "enabled" in rate_limit and rate_limit["enabled"]:
+                    if "requests_per_minute" in rate_limit:
+                        config.rate_limit.requests_per_minute = int(rate_limit["requests_per_minute"])
+                    if "burst" in rate_limit:
+                        config.rate_limit.burst_size = int(rate_limit["burst"])
+                
+            # Logging configuration
+            if "logging" in data:
+                logging_config = data["logging"]
+                if "destination" in logging_config:
+                    config.logging.destination = logging_config["destination"]
+                    # Parse directory and filename from destination
+                    dest_path = logging_config["destination"]
+                    if "/" in dest_path:
+                        config.logging.log_dir = os.path.dirname(dest_path)
+                        config.logging.log_file = os.path.basename(dest_path)
+                if "level" in logging_config:
+                    config.logging.log_level = logging_config["level"].upper()
+                if "structured" in logging_config:
+                    config.logging.structured = bool(logging_config["structured"])
+                if "format" in logging_config:
+                    config.logging.json_format = logging_config["format"].lower() == "json"
+                
+            # Security headers
+            if "security_headers" in data:
+                config.security.security_headers = data["security_headers"]
                 
             # Negative security rules (block patterns)
             if "negative_rules" in data:

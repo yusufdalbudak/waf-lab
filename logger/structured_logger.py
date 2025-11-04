@@ -5,8 +5,8 @@ import aiofiles
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
-from queue import Queue
+from typing import Dict, Any, Optional, List
+from queue import Queue, Empty
 from threading import Thread
 
 
@@ -40,17 +40,26 @@ class AsyncLogWriter:
             try:
                 entry = self.queue.get(timeout=1.0)
                 if entry is None:  # Poison pill
+                    self.queue.task_done()  # Only call task_done() for poison pill
                     break
                     
-                with open(self.log_file, "a") as f:
-                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                    f.flush()  # Ensure immediate disk write
-                    
+                try:
+                    with open(self.log_file, "a") as f:
+                        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                        f.flush()  # Ensure immediate disk write
+                except Exception as e:
+                    # Log errors to stderr to avoid recursion
+                    print(f"Log writer error: {e}", file=__import__("sys").stderr)
+                finally:
+                    # Only call task_done() when we successfully retrieved an item
+                    self.queue.task_done()
+            except Empty:
+                # Queue.get() timeout - no item retrieved, don't call task_done()
+                # This is expected when queue is empty, just continue
+                pass
             except Exception as e:
-                # Log errors to stderr to avoid recursion
-                print(f"Log writer error: {e}", file=__import__("sys").stderr)
-            finally:
-                self.queue.task_done()
+                # Other errors - log but don't crash
+                print(f"Log writer unexpected error: {e}", file=__import__("sys").stderr)
     
     async def write(self, entry: Dict[str, Any]):
         """
@@ -172,6 +181,8 @@ class StructuredLogger:
         response_time_ms: float = 0.0,
         bytes_sent: int = 0,
         threat_category: Optional[str] = None,
+        matched_rule_ids: Optional[List[str]] = None,
+        status_code: Optional[int] = None,
         **extra_fields
     ):
         """
@@ -182,30 +193,45 @@ class StructuredLogger:
             path: Request path
             client_ip: Client IP address
             user_agent: User-Agent header
-            decision: allow|block|challenge
+            decision: allow|block|challenge|rate_limit
             reason: Block reason (e.g., "rule:SQLi-1", "rate_limit")
             score: Anomaly score (0.0-100.0)
             response_time_ms: Response time in milliseconds
             bytes_sent: Response size in bytes
             threat_category: Detected threat category
+            matched_rule_ids: List of matched rule IDs
+            status_code: HTTP status code
             **extra_fields: Additional custom fields
         """
         level = "WARNING" if decision != "allow" else "INFO"
+        
+        # Extract matched rule IDs from reason if not provided
+        if matched_rule_ids is None:
+            matched_rule_ids = []
+            if reason.startswith("rule:"):
+                matched_rule_ids = [reason.split(":", 1)[1]]
+        
+        # Add timestamp as epoch seconds
+        import time
+        timestamp = time.time()
         
         await self._log(
             level=level,
             event_type="request",
             message=f"{decision.upper()}: {method} {path} from {client_ip}",
+            timestamp=timestamp,
             method=method,
             path=path,
             client_ip=client_ip,
             user_agent=user_agent,
             decision=decision,
             reason=reason,
+            matched_rule_ids=matched_rule_ids,
             score=score,
             response_time_ms=response_time_ms,
             bytes_sent=bytes_sent,
             threat_category=threat_category,
+            status_code=status_code,
             **extra_fields
         )
     
@@ -290,8 +316,10 @@ def get_logger(config=None) -> StructuredLogger:
     
     if _logger_instance is None:
         if config:
+            # Use destination from config if available, otherwise fall back to log_dir/log_file
+            log_file = getattr(config.logging, 'destination', None) or f"{config.logging.log_dir}/{config.logging.log_file}"
             _logger_instance = StructuredLogger(
-                log_file=f"{config.logging.log_dir}/{config.logging.log_file}",
+                log_file=log_file,
                 log_level=config.logging.log_level,
                 enable_console=config.logging.enable_console,
                 json_format=config.logging.json_format

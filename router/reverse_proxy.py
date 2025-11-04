@@ -65,6 +65,8 @@ class ReverseProxy:
         Security: Remove sensitive headers that could be exploited.
         Remove proxy-specific headers to prevent header injection.
         
+        Headers to exclude: Host, Content-Length, Transfer-Encoding, Connection
+        
         Args:
             request: Original client request
             
@@ -73,11 +75,16 @@ class ReverseProxy:
         """
         headers = {}
         
+        # Headers to exclude (as per requirements)
+        exclude_headers = {
+            "host", "content-length", "transfer-encoding", "connection"
+        }
+        
         for key, value in request.headers.items():
             key_lower = key.lower()
             
-            # Block sensitive headers
-            if key_lower in self.blocked_request_headers:
+            # Block sensitive headers and excluded headers
+            if key_lower in self.blocked_request_headers or key_lower in exclude_headers:
                 continue
             
             # Sanitize X-Forwarded-For to prevent header injection
@@ -87,8 +94,19 @@ class ReverseProxy:
                 headers["X-Forwarded-For"] = first_ip
                 continue
             
+            # Modify Accept-Encoding to prefer gzip over brotli (if brotli not available)
+            if key_lower == "accept-encoding":
+                # Prefer gzip, deflate, but allow brotli if available
+                # This ensures compatibility even if Brotli library isn't installed
+                headers["Accept-Encoding"] = "gzip, deflate, br"
+                continue
+            
             # Add other headers as-is
             headers[key] = value
+        
+        # If no Accept-Encoding was set, add a default one
+        if "Accept-Encoding" not in headers:
+            headers["Accept-Encoding"] = "gzip, deflate, br"
         
         # Add our own proxy headers
         headers["X-Forwarded-By"] = "waf-lab"
@@ -97,15 +115,7 @@ class ReverseProxy:
     
     def _add_security_headers(self, response: web.Response) -> web.Response:
         """
-        Add security headers to response.
-        
-        Implements OWASP security header recommendations:
-        - Content-Security-Policy (CSP)
-        - Strict-Transport-Security (HSTS)
-        - X-Content-Type-Options
-        - X-Frame-Options
-        - X-XSS-Protection
-        - Referrer-Policy
+        Add security headers to response from config.
         
         Args:
             response: Response object to modify
@@ -115,42 +125,10 @@ class ReverseProxy:
         """
         headers = response.headers
         
-        # Content Security Policy (CSP)
-        if self.config.security.enable_csp:
-            # Restrictive CSP - adjust based on application needs
-            csp = (
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "  # Adjust for JS frameworks
-                "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data: https:; "
-                "font-src 'self' data:; "
-                "connect-src 'self'; "
-                "frame-ancestors 'none';"
-            )
-            headers["Content-Security-Policy"] = csp
-        
-        # HTTP Strict Transport Security (HSTS)
-        if self.config.security.enable_hsts:
-            headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        
-        # X-Content-Type-Options (prevent MIME sniffing)
-        headers["X-Content-Type-Options"] = "nosniff"
-        
-        # X-Frame-Options (prevent clickjacking)
-        headers["X-Frame-Options"] = "DENY"
-        
-        # X-XSS-Protection
-        if self.config.security.enable_xss_protection:
-            headers["X-XSS-Protection"] = "1; mode=block"
-        
-        # Referrer-Policy
-        headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        
-        # Permissions-Policy (formerly Feature-Policy)
-        headers["Permissions-Policy"] = (
-            "geolocation=(), microphone=(), camera=(), "
-            "payment=(), usb=(), magnetometer=(), gyroscope=()"
-        )
+        # Apply security headers from config
+        if hasattr(self.config.security, 'security_headers') and self.config.security.security_headers:
+            for header_name, header_value in self.config.security.security_headers.items():
+                headers[header_name] = header_value
         
         return response
     
@@ -220,8 +198,12 @@ class ReverseProxy:
             # Sanitize request headers
             headers = self._sanitize_request_headers(request)
             
-            # Build full backend URL
-            url = f"{backend_url.rstrip('/')}{path}"
+            # Build full backend URL - preserve query string
+            query_string = request.rel_url.query_string
+            if query_string:
+                url = f"{backend_url.rstrip('/')}{path}?{query_string}"
+            else:
+                url = f"{backend_url.rstrip('/')}{path}"
             
             # Proxy request to backend
             async with session.request(
@@ -277,11 +259,11 @@ class ReverseProxy:
                 duration_seconds=duration
             )
             
-            return web.Response(
-                status=502,
-                text="Bad Gateway: Backend connection failed",
-                headers={"Content-Type": "text/plain"}
+            error_response = web.json_response(
+                {"error": "backend_unreachable", "message": "Bad Gateway: Backend connection failed"},
+                status=502
             )
+            return self._add_security_headers(error_response)
             
         except asyncio.TimeoutError:
             # Timeout errors
@@ -299,11 +281,11 @@ class ReverseProxy:
                 duration_seconds=duration
             )
             
-            return web.Response(
-                status=504,
-                text="Gateway Timeout: Backend did not respond in time",
-                headers={"Content-Type": "text/plain"}
+            error_response = web.json_response(
+                {"error": "backend_timeout", "message": "Gateway Timeout: Backend did not respond in time"},
+                status=504
             )
+            return self._add_security_headers(error_response)
             
         except Exception as e:
             # Unexpected errors
@@ -322,11 +304,11 @@ class ReverseProxy:
                 duration_seconds=duration
             )
             
-            return web.Response(
-                status=500,
-                text="Internal Server Error",
-                headers={"Content-Type": "text/plain"}
+            error_response = web.json_response(
+                {"error": "internal_error", "message": "Internal Server Error"},
+                status=500
             )
+            return self._add_security_headers(error_response)
 
 
 def create_proxy_handler(proxy: ReverseProxy):

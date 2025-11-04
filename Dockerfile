@@ -28,7 +28,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Set working directory
 WORKDIR /app
 
-# Copy application code
+# Copy application code (auth included)
 COPY --chown=waf:waf waf.py rules.json /app/
 COPY --chown=waf:waf config/ /app/config/
 COPY --chown=waf:waf logger/ /app/logger/
@@ -36,6 +36,7 @@ COPY --chown=waf:waf inspector/ /app/inspector/
 COPY --chown=waf:waf router/ /app/router/
 COPY --chown=waf:waf utils/ /app/utils/
 COPY --chown=waf:waf metrics/ /app/metrics/
+COPY --chown=waf:waf auth/ /app/auth/
 COPY --chown=waf:waf core/ /app/core/
 
 # Create log directory with proper permissions
@@ -44,9 +45,11 @@ RUN mkdir -p /app/logs && chown -R waf:waf /app/logs
 # Security: Drop privileges
 USER waf
 
-# Health check
+# Health check (make sure your app exposes /healthz; change if needed)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+    CMD python -c "import urllib.request,sys; \
+    r=urllib.request.urlopen('http://127.0.0.1:8000/healthz'); \
+    sys.exit(0 if r.getcode()==200 else 1)"
 
 # Expose WAF port
 EXPOSE 8000

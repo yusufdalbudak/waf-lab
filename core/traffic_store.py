@@ -58,6 +58,8 @@ class TrafficStore:
         
         if entry.decision == "allow":
             self.stats["total_allowed"] += 1
+        elif entry.decision == "rate_limit":
+            self.stats["total_blocked"] += 1  # Rate limit counts as blocked
         else:
             self.stats["total_blocked"] += 1
         

@@ -1,36 +1,4 @@
-version: "3.9"
-
 services:
-  waf:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: waf-lab
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      - WAF_BACKEND_URL=http://backend:3000
-      - WAF_PORT=8000
-      - WAF_HOST=0.0.0.0
-      - WAF_LOG_LEVEL=INFO
-      - WAF_RATE_LIMIT_RPM=60
-      - WAF_ANOMALY_THRESHOLD=50.0
-    volumes:
-      # Persist logs for analysis
-      - ./logs:/app/logs
-    networks:
-      - waf-network
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
-
   backend:
     image: bkimminich/juice-shop:latest
     container_name: juice-shop
@@ -40,11 +8,21 @@ services:
     networks:
       - waf-network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/status', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      test: ["CMD-SHELL", "curl -fs http://localhost:3000/api/status || exit 0"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 30s
+      retries: 5
+      start_period: 60s
+
+  waf:
+    build: .
+    container_name: waf-lab
+    ports:
+      - "8000:8000"
+    depends_on:
+      - backend
+    networks:
+      - waf-network
 
 networks:
   waf-network:

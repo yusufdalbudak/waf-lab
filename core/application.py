@@ -49,12 +49,21 @@ class WAFApplication:
         # Background tasks
         self._background_tasks = []
     
+    def _apply_security_headers(self, response: web.Response) -> web.Response:
+        """Apply security headers from config to response."""
+        if hasattr(self.config.security, 'security_headers') and self.config.security.security_headers:
+            for header_name, header_value in self.config.security.security_headers.items():
+                response.headers[header_name] = header_value
+        return response
+    
     def _setup_routes(self):
-        """Setup application routes."""
-        # Main request handler (catches all paths)
-        self.app.router.add_route('*', '/{tail:.*}', self.handle_request)
+        """Setup application routes.
         
-        # Health check endpoint
+        IMPORTANT: Specific routes must be registered BEFORE catch-all routes.
+        Route matching is done in registration order.
+        """
+        # Health check endpoint (must be before catch-all route)
+        self.app.router.add_get('/healthz', self.health_check)
         self.app.router.add_get('/health', self.health_check)
         
         # Prometheus metrics endpoint
@@ -71,20 +80,28 @@ class WAFApplication:
         self.app.router.add_get('/logout', logout_handler)
         self.app.router.add_post('/auth/logout', logout_handler)
         
-        # Dashboard endpoints (protected)
-        from core.dashboard_handlers import dashboard_ui_handler, dashboard_stats_handler, dashboard_traffic_handler
+        # Dashboard endpoints (protected) - MUST be before catch-all route
+        from core.dashboard_handlers import (
+            dashboard_ui_handler, dashboard_stats_handler, 
+            dashboard_traffic_handler, dashboard_export_handler
+        )
         self.app.router.add_get('/dashboard', require_auth(dashboard_ui_handler))
         self.app.router.add_get('/api/dashboard/stats', require_auth(dashboard_stats_handler))
         self.app.router.add_get('/api/dashboard/traffic', require_auth(dashboard_traffic_handler))
+        self.app.router.add_get('/api/dashboard/export', require_auth(dashboard_export_handler))
+        
+        # Main request handler (catches all paths) - MUST be last
+        self.app.router.add_route('*', '/{tail:.*}', self.handle_request)
     
     async def handle_request(self, request: web.Request) -> web.Response:
         """
         Main request handler implementing WAF pipeline:
         1. Extract client IP
-        2. Rate limiting check
-        3. Request inspection (rule engine)
-        4. Decision: block or proxy
-        5. Logging and metrics
+        2. Skip inspection for /healthz
+        3. Rate limiting check
+        4. Request inspection (rule engine)
+        5. Decision: block or proxy
+        6. Logging and metrics
         
         Args:
             request: aiohttp request object
@@ -95,8 +112,14 @@ class WAFApplication:
         start_time = time.time()
         client_ip = get_client_ip(request)
         method = request.method
+        path_str = str(request.rel_url.path)
         path = str(request.rel_url)
         user_agent = request.headers.get("User-Agent", "")
+        
+        # Skip inspection for health check endpoint
+        if path_str == "/healthz":
+            response = web.json_response({"status": "ok"})
+            return self._apply_security_headers(response)
         
         # Track active connections
         self.metrics.increment_connections()
@@ -135,18 +158,33 @@ class WAFApplication:
                     path=path,
                     client_ip=client_ip,
                     user_agent=user_agent,
-                    decision="block",
+                    decision="rate_limit",
                     reason="rate_limit",
-                    score=0.0,
+                    score=20.0,  # Optional score for rate limit
                     threat_category="rate_limit",
                     status_code=429,
                     response_time_ms=duration * 1000,
                     bytes_sent=0
                 ))
                 
-                return web.Response(
+                # Log rate limit with full details
+                await self.logger.log_request(
+                    method=method,
+                    path=path,
+                    client_ip=client_ip,
+                    user_agent=user_agent,
+                    decision="rate_limit",
+                    reason="rate_limit",
+                    score=20.0,
+                    response_time_ms=duration * 1000,
+                    bytes_sent=0,
+                    threat_category="rate_limit",
+                    status_code=429
+                )
+                
+                response = web.json_response(
+                    {"error": "rate_limit_exceeded", "message": "Too Many Requests"},
                     status=429,
-                    text="Too Many Requests: Rate limit exceeded",
                     headers={
                         "X-RateLimit-Limit": str(rate_limit_meta["limit"]),
                         "X-RateLimit-Remaining": str(int(rate_limit_meta["remaining_tokens"])),
@@ -154,6 +192,7 @@ class WAFApplication:
                         "Retry-After": str(int(rate_limit_meta["reset_seconds"]))
                     }
                 )
+                return self._apply_security_headers(response)
             
             # Step 2: Read request body (for inspection)
             try:
@@ -178,13 +217,29 @@ class WAFApplication:
                 )
                 
                 duration = time.time() - start_time
-                await self.logger.log_block(
+                
+                # Format matched rule IDs as comma-separated list
+                matched_rule_ids = inspection_result.matched_rules if inspection_result.matched_rules else []
+                matched_rule_ids_str = ",".join(matched_rule_ids) if matched_rule_ids else ""
+                
+                # Get first matched rule ID for response format
+                first_rule_id = matched_rule_ids[0] if matched_rule_ids else inspection_result.reason.split(":")[-1] if ":" in inspection_result.reason else "unknown"
+                
+                threat_category_str = inspection_result.threat_category.value if inspection_result.threat_category else None
+                
+                await self.logger.log_request(
                     method=method,
                     path=path,
                     client_ip=client_ip,
+                    user_agent=user_agent,
+                    decision="block",
                     reason=inspection_result.reason,
                     score=inspection_result.score,
-                    threat_category=inspection_result.threat_category.value if inspection_result.threat_category else None
+                    response_time_ms=duration * 1000,
+                    bytes_sent=0,
+                    threat_category=threat_category_str,
+                    matched_rule_ids=matched_rule_ids,
+                    status_code=403
                 )
                 
                 self.metrics.record_request(
@@ -205,32 +260,40 @@ class WAFApplication:
                     decision="block",
                     reason=inspection_result.reason,
                     score=inspection_result.score,
-                    threat_category=inspection_result.threat_category.value if inspection_result.threat_category else None,
+                    threat_category=threat_category_str,
                     status_code=403,
                     response_time_ms=duration * 1000,
                     bytes_sent=0
                 ))
                 
-                return web.Response(
+                # Format response: "Forbidden: rule:<FIRST_MATCHED_RULE_ID>"
+                response_text = f"Forbidden: rule:{first_rule_id}"
+                response = web.Response(
                     status=403,
-                    text=f"Forbidden: {inspection_result.reason}",
+                    text=response_text,
                     headers={
                         "X-WAF-Reason": inspection_result.reason,
-                        "X-WAF-Score": str(inspection_result.score)
+                        "X-WAF-Score": str(inspection_result.score),
+                        "X-WAF-Rules": matched_rule_ids_str
                     }
                 )
+                return self._apply_security_headers(response)
             
             # Step 5: Proxy to backend (request allowed)
+            # Use path_str for proxy (without query string, proxy will add it)
             response = await self.proxy.proxy_request(
                 request=request,
                 backend_url=self.config.backend.url,
-                path=path,
+                path=path_str,
                 body=body_text.encode() if body_text else b""
             )
             
             # Log allowed request
             duration = time.time() - start_time
             bytes_sent = len(response.body) if hasattr(response, 'body') and response.body else 0
+            
+            matched_rule_ids = inspection_result.matched_rules if inspection_result.matched_rules else []
+            threat_category_str = inspection_result.threat_category.value if inspection_result.threat_category else None
             
             await self.logger.log_request(
                 method=method,
@@ -242,7 +305,9 @@ class WAFApplication:
                 score=inspection_result.score,
                 response_time_ms=duration * 1000,
                 bytes_sent=bytes_sent,
-                threat_category=inspection_result.threat_category.value if inspection_result.threat_category else None
+                threat_category=threat_category_str,
+                matched_rule_ids=matched_rule_ids,
+                status_code=response.status
             )
             
             # Store in traffic store for dashboard
@@ -255,12 +320,13 @@ class WAFApplication:
                 decision="allow",
                 reason="ok",
                 score=inspection_result.score,
-                threat_category=inspection_result.threat_category.value if inspection_result.threat_category else None,
+                threat_category=threat_category_str,
                 status_code=response.status,
                 response_time_ms=duration * 1000,
                 bytes_sent=bytes_sent
             ))
             
+            # Security headers are already applied by proxy
             return response
             
         except Exception as e:
@@ -277,11 +343,11 @@ class WAFApplication:
                 duration_seconds=duration
             )
             
-            return web.Response(
-                status=500,
-                text="Internal Server Error",
-                headers={"Content-Type": "text/plain"}
+            error_response = web.json_response(
+                {"error": "internal_error", "message": "Internal Server Error"},
+                status=500
             )
+            return self._apply_security_headers(error_response)
         
         finally:
             # Always decrement connection counter
@@ -289,11 +355,11 @@ class WAFApplication:
     
     async def health_check(self, request: web.Request) -> web.Response:
         """Health check endpoint for orchestration (Kubernetes, Docker, etc.)."""
-        return web.json_response({
-            "status": "healthy",
-            "service": "waf",
-            "version": "1.0.0"
+        response = web.json_response({
+            "status": "ok"
         })
+        # Apply security headers
+        return self._apply_security_headers(response)
     
     async def metrics_endpoint(self, request: web.Request) -> web.Response:
         """Prometheus metrics scraping endpoint."""

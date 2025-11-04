@@ -103,7 +103,8 @@ class RuleEngine:
                     "pattern": compiled,
                     "category": self._map_category(rule.get("category", "unknown")),
                     "severity": rule.get("severity", "medium"),  # low|medium|high|critical
-                    "score": rule.get("score", 50.0)  # Default anomaly score contribution
+                    "score": rule.get("score", 50.0),  # Default anomaly score contribution
+                    "phase": rule.get("phase", "request")  # request or response phase
                 })
             except re.error as e:
                 # Log regex compilation error but don't crash
@@ -152,7 +153,7 @@ class RuleEngine:
         Inspection pipeline:
         1. IP whitelist/blacklist check
         2. Positive security model (if enabled)
-        3. Negative security model (pattern matching)
+        3. Negative security model (pattern matching) - accumulate all matches
         4. Anomaly scoring (behavioral analysis)
         5. Decision making based on thresholds
         
@@ -168,9 +169,33 @@ class RuleEngine:
             headers = dict(request.headers)
         
         result = InspectionResult()
-        path = str(request.rel_url)
+        path = str(request.rel_url.path)
         method = request.method.upper()
         client_ip = request.remote
+        
+        # Build normalized inspection string from request components
+        from urllib.parse import unquote
+        query_string = unquote(str(request.rel_url.query_string)) if request.rel_url.query_string else ""
+        
+        # Build inspection context: method + path + query + relevant headers + body
+        inspection_parts = [
+            method,
+            path,
+            query_string
+        ]
+        
+        # Add relevant headers (content-type, user-agent, etc.)
+        relevant_headers = ["content-type", "user-agent", "referer", "origin"]
+        for header_name in relevant_headers:
+            if header_name in headers:
+                inspection_parts.append(f"{header_name}:{headers[header_name]}")
+        
+        # Add body for POST/PUT requests
+        if body:
+            inspection_parts.append(body)
+        
+        # Create normalized inspection string
+        inspection_string = " ".join(inspection_parts)
         
         # Step 1: IP-based decisions (fastest path)
         if client_ip in self.config.ip_blacklist:
@@ -207,49 +232,57 @@ class RuleEngine:
                 result.threat_category = ThreatCategory.UNAUTHORIZED_ACCESS
                 return result
         
-        # Step 3: Negative Security Model (NSM) - block known bad patterns
+        # Step 3: Negative Security Model (NSM) - check all rules and accumulate scores
+        # Track all matched rules and their scores
+        matched_rules_with_scores = []  # List of (rule_id, score, category)
+        
         for rule in self.negative_rules:
-            # Check path
-            if rule["pattern"].search(path):
-                result.decision = "block"
-                result.reason = f"rule:{rule['id']}"
-                result.score += rule["score"]
-                result.matched_rules.append(rule["id"])
-                result.threat_category = rule["category"]
-                result.indicators[f"negative_rule_{rule['id']}"] = rule["score"]
-                return result  # Immediate block on NSM match
+            # Only check rules with phase == "request" (skip response phase rules)
+            # All our rules are request phase, but check for safety
+            rule_phase = rule.get("phase", "request")
+            if rule_phase != "request":
+                continue
             
-            # Check body
-            if body and rule["pattern"].search(body):
-                result.decision = "block"
-                result.reason = f"rule:{rule['id']}"
-                result.score += rule["score"]
+            # Check against normalized inspection string
+            if rule["pattern"].search(inspection_string):
+                matched_rules_with_scores.append((rule["id"], rule["score"], rule["category"]))
                 result.matched_rules.append(rule["id"])
-                result.threat_category = rule["category"]
                 result.indicators[f"negative_rule_{rule['id']}"] = rule["score"]
-                return result
+        
+        # Accumulate total score from all matched rules
+        if matched_rules_with_scores:
+            # Sum all scores
+            total_score = sum(score for _, score, _ in matched_rules_with_scores)
+            result.score = total_score
             
-            # Check headers
-            for header_name, header_value in headers.items():
-                if rule["pattern"].search(f"{header_name}:{header_value}"):
-                    result.decision = "block"
-                    result.reason = f"rule:{rule['id']}"
-                    result.score += rule["score"]
-                    result.matched_rules.append(rule["id"])
-                    result.threat_category = rule["category"]
-                    result.indicators[f"negative_rule_{rule['id']}"] = rule["score"]
-                    return result
+            # Determine dominant threat category (highest scoring rule)
+            dominant_rule = max(matched_rules_with_scores, key=lambda x: x[1])
+            result.threat_category = dominant_rule[2]
+            
+            # First matched rule ID for response format
+            first_rule_id = matched_rules_with_scores[0][0]
+            
+            # Decision: block if total_score >= threshold
+            if total_score >= self.config.security.anomaly_threshold:
+                result.decision = "block"
+                result.reason = f"rule:{first_rule_id}"
+            else:
+                # Score below threshold, allow but log
+                result.decision = "allow"
+                result.reason = f"rule:{first_rule_id}"  # Still log which rules matched
         
-        # Step 4: Anomaly Scoring (behavioral analysis)
-        anomaly_score = await self._calculate_anomaly_score(request, body, headers, path, method)
-        result.score += anomaly_score
-        
-        # Step 5: Decision based on threshold
-        if result.score >= self.config.security.anomaly_threshold:
-            result.decision = "block"
-            result.reason = "anomaly_score_exceeded"
-            if not result.threat_category:
-                result.threat_category = ThreatCategory.UNKNOWN
+        # Step 4: Anomaly Scoring (behavioral analysis) - only if no rules matched
+        # Note: We skip anomaly scoring if rules matched to avoid double-counting
+        if not matched_rules_with_scores:
+            anomaly_score = await self._calculate_anomaly_score(request, body, headers, path, method)
+            result.score += anomaly_score
+            
+            # Decision based on anomaly threshold
+            if result.score >= self.config.security.anomaly_threshold:
+                result.decision = "block"
+                result.reason = "anomaly_score_exceeded"
+                if not result.threat_category:
+                    result.threat_category = ThreatCategory.UNKNOWN
         
         # Cap score at 100.0
         result.score = min(result.score, 100.0)

@@ -1,106 +1,168 @@
 {
-  "backend": "http://backend:3000",
+  "version": "1.0",
+  "backend": "http://juice-shop:3000",
+  "mode": "negative_security",
+  "description": "Comprehensive baseline WAF rule set for application-layer threat prevention (SQLi, XSS, RCE, SSRF, etc.)",
+  "meta": {
+    "maintainer": "Yusuf Dalbudak - CyberDistro WAF-Lab",
+    "last_updated": "2025-11-04",
+    "engine": "aiohttp-waf",
+    "classification": "baseline-protection",
+    "thresholds": {
+      "rate_limit_rpm": 60,
+      "anomaly_block_threshold": 50.0
+    }
+  },
   "negative_rules": [
     {
       "id": "SQLi-1",
-      "pattern": "(?i)(union(\\s|%20)+select|drop(\\s|%20)+table|insert(\\s|%20)+into|delete(\\s|%20)+from|--|;\\s*--|\\bor(\\s|%20)+1=1\\b)",
       "category": "sql_injection",
       "severity": "high",
-      "score": 80.0
+      "score": 80.0,
+      "phase": "request",
+      "pattern": "(?i)(union(\\s|%20)+select|drop(\\s|%20)+table|insert(\\s|%20)+into|delete(\\s|%20)+from|;\\s*--|\\bor(\\s|%20)+1=1\\b)",
+      "description": "Detects classical SQL Injection patterns such as UNION SELECT, OR 1=1, and comment-based payloads."
     },
     {
       "id": "SQLi-2",
-      "pattern": "(?i)(exec(\\s|%20)+\\(|xp_cmdshell|sp_executesql|pg_exec)",
       "category": "sql_injection",
       "severity": "critical",
-      "score": 90.0
+      "score": 90.0,
+      "phase": "request",
+      "pattern": "(?i)(exec(\\s|%20)+\\(|xp_cmdshell|sp_executesql|pg_exec)",
+      "description": "Detects database function abuse or execution attempts such as xp_cmdshell or pg_exec."
     },
     {
       "id": "XSS-1",
-      "pattern": "(?i)(<script|%3Cscript|onerror=|onload=|alert\\(\\)|javascript:|eval\\s*\\()",
       "category": "cross_site_scripting",
       "severity": "high",
-      "score": 70.0
+      "score": 70.0,
+      "phase": "request",
+      "pattern": "(?i)(<script|%3Cscript|onerror=|onload=|alert\\(\\)|javascript:|eval\\s*\\()",
+      "description": "Detects JavaScript injection or script tag attempts typical in XSS attacks."
     },
     {
       "id": "XSS-2",
-      "pattern": "(?i)(<iframe|<object|<embed|data:text/html)",
       "category": "cross_site_scripting",
       "severity": "medium",
-      "score": 50.0
+      "score": 50.0,
+      "phase": "request",
+      "pattern": "(?i)(<iframe|<object|<embed|data:text/html)",
+      "description": "Detects HTML embedded object injection commonly used for phishing or drive-by exploits."
     },
     {
       "id": "CMD-1",
-      "pattern": "(?i)([;&|`]\\s*(ls|cat|pwd|whoami|id|uname|wget|curl|nc|netcat))",
       "category": "command_injection",
       "severity": "critical",
-      "score": 95.0
+      "score": 95.0,
+      "phase": "request",
+      "pattern": "(?i)([;&|`]\\s*(ls|cat|pwd|whoami|id|uname|wget|curl|nc|netcat))",
+      "description": "Detects shell command injection attempts using common system utilities."
     },
     {
       "id": "PATH-1",
-      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self|/windows/system32)",
       "category": "path_traversal",
       "severity": "high",
-      "score": 75.0
+      "score": 75.0,
+      "phase": "request",
+      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self|/windows/system32)",
+      "description": "Detects directory traversal and local file enumeration attempts."
     },
     {
       "id": "RCE-1",
-      "pattern": "(?i)(eval\\s*\\(|exec\\s*\\(|system\\s*\\(|shell_exec|passthru)",
       "category": "remote_code_execution",
       "severity": "critical",
-      "score": 100.0
+      "score": 100.0,
+      "phase": "request",
+      "pattern": "(?i)(eval\\s*\\(|exec\\s*\\(|system\\s*\\(|shell_exec|passthru)",
+      "description": "Detects function-based remote code execution payloads."
     },
     {
       "id": "RCE-2",
-      "pattern": "(?i)(\\$\\{|jndi:|ldap://|rmi://|dns://|\\{\\{.*\\}\\})",
       "category": "remote_code_execution",
       "severity": "critical",
-      "score": 90.0
+      "score": 90.0,
+      "phase": "request",
+      "pattern": "(?i)(\\$\\{|jndi:|ldap://|rmi://|dns://|\\{\\{.*\\}\\})",
+      "description": "Detects template injection and JNDI-based remote code execution attempts (e.g. Log4Shell)."
     },
     {
       "id": "XXE-1",
-      "pattern": "(?i)(<!ENTITY|<!DOCTYPE|SYSTEM\\s+['\"]|PUBLIC\\s+['\"]|file://|http://|php://|expect://)",
       "category": "xml_external_entity",
       "severity": "high",
-      "score": 80.0
+      "score": 80.0,
+      "phase": "request",
+      "pattern": "(?i)(<!ENTITY|<!DOCTYPE|SYSTEM\\s+['\"]|PUBLIC\\s+['\"]|file://|php://|expect://)",
+      "description": "Detects XML External Entity (XXE) attack payloads that attempt to read local or remote resources."
     },
     {
       "id": "SSRF-1",
-      "pattern": "(?i)(http://127\\.0\\.0\\.1|http://localhost|http://0\\.0\\.0\\.0|http://169\\.254|gopher://|dict://)",
       "category": "server_side_request_forgery",
       "severity": "high",
-      "score": 75.0
+      "score": 75.0,
+      "phase": "request",
+      "pattern": "(?i)(http://127\\.0\\.0\\.1|http://localhost|http://0\\.0\\.0\\.0|http://169\\.254|gopher://|dict://)",
+      "description": "Detects attempts to force the server to make internal requests (SSRF)."
     },
     {
       "id": "LFI-1",
-      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|include\\s*\\(|require\\s*\\(|php://|file://|data://)",
       "category": "local_file_inclusion",
       "severity": "high",
-      "score": 85.0
+      "score": 85.0,
+      "phase": "request",
+      "pattern": "(?i)(\\.\\./|\\.\\.\\\\|include\\s*\\(|require\\s*\\(|php://|file://|data://)",
+      "description": "Detects local file inclusion or read attempts through traversal or wrapper paths."
     },
     {
       "id": "RFI-1",
-      "pattern": "(?i)(http://|https://|ftp://|file://|php://|data://|expect://)",
       "category": "remote_file_inclusion",
       "severity": "critical",
-      "score": 90.0
+      "score": 90.0,
+      "phase": "request",
+      "pattern": "(?i)(http://|https://|ftp://|file://|php://|data://|expect://)",
+      "description": "Detects remote file inclusion attempts using external URI wrappers."
     },
     {
       "id": "HEADER-1",
-      "pattern": "(?i)(X-Forwarded-For|X-Real-IP|X-Originating-IP|X-Remote-IP|X-Remote-Addr)",
       "category": "header_manipulation",
       "severity": "medium",
-      "score": 30.0
+      "score": 30.0,
+      "phase": "request",
+      "pattern": "(?i)(X-Forwarded-For|X-Real-IP|X-Originating-IP|X-Remote-IP|X-Remote-Addr)",
+      "description": "Detects header spoofing or origin manipulation attempts."
     },
     {
       "id": "PROTOCOL-1",
-      "pattern": "(?i)(TRACE|CONNECT|OPTIONS|PATCH|DELETE)",
-      "category": "protocol_anomaly",
-      "severity": "medium",
-      "score": 25.0
+      "category": "protocol_violation",
+      "severity": "low",
+      "score": 20.0,
+      "phase": "request",
+      "pattern": "(?i)(ftp|file)://",
+      "description": "Blocks non-HTTP(S) protocol references that could indicate SSRF or insecure file retrieval."
     }
   ],
   "positive_rules": [],
   "ip_whitelist": [],
-  "ip_blacklist": []
+  "ip_blacklist": [],
+  "rate_limit": {
+    "enabled": true,
+    "requests_per_minute": 60,
+    "burst": 10,
+    "action": "block"
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json",
+    "destination": "/app/logs/waf.log",
+    "structured": true,
+    "fields": ["timestamp", "client_ip", "path", "method", "decision", "rule_id", "score", "threat_category"]
+  },
+  "security_headers": {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-XSS-Protection": "1; mode=block",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()"
+  }
 }
